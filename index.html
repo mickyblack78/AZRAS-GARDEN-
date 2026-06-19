@@ -135,36 +135,25 @@
     }
 
         async function initAssets() {
-    state.tiles = []; state.rewardPool = []; state.chestPool = [];
-    
-    const loadSlice = async (file, rows, cols, arr) => {
-        return new Promise((resolve) => {
-            const img = new Image();
-            img.src = file;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                const w = img.width / cols, h = img.height / rows;
-                for(let i=0; i<(rows*cols); i++) {
-                    canvas.width = w; canvas.height = h;
-                    ctx.drawImage(img, (i%cols)*w, Math.floor(i/cols)*h, w, h, 0, 0, w, h);
-                    arr.push(canvas.toDataURL());
-                }
-                resolve();
-            };
-            img.onerror = () => {
-                console.error("Failed to load: " + file);
-                resolve(); // Continue even if one image fails
-            };
-        });
-    };
+        state.tiles = []; state.rewardPool = []; state.chestPool = [];
+        
+        const loadSlice = async (file, rows, cols, arr) => {
+            const img = new Image(); img.src = file;
+            await img.decode();
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const w = img.width / cols, h = img.height / rows;
+            for(let i=0; i<(rows*cols); i++) {
+                canvas.width = w; canvas.height = h;
+                ctx.drawImage(img, (i%cols)*w, Math.floor(i/cols)*h, w, h, 0, 0, w, h);
+                arr.push(canvas.toDataURL());
+            }
+        };
 
-    await Promise.all([
-        loadSlice('P50.png', 7, 7, state.tiles),
-        loadSlice('A2.png', 5, 5, state.rewardPool),
-        loadSlice('A3.png', 7, 7, state.chestPool)
-    ]);
-        }
+        await loadSlice('P50.png', 7, 7, state.tiles);
+        await loadSlice('A2.png', 5, 5, state.rewardPool);
+        await loadSlice('A3.png', 7, 7, state.chestPool);
+                              }
         // Prize sheet based on milestones
         let prizeFile = 'A2.png';
         if (state.stage > 75) prizeFile = 'a2a3.png';
