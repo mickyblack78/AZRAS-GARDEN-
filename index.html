@@ -147,7 +147,7 @@
         const loadSlice = async (file, rows, cols, arr) => {
             const img = new Image(); img.src = file;
             try {
-                await img.decode();
+                await new Promise(r => { img.onload = r; img.onerror = r; });
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 const w = img.width / cols, h = img.height / rows;
