@@ -153,7 +153,7 @@
                 const w = img.width / cols, h = img.height / rows;
                 for(let i=0; i<(rows*cols); i++) {
                     canvas.width = w; canvas.height = h;
-                    ctx.drawImage(img, (i%cols)*w, Math.floor(i/rows)*h, w, h, 0, 0, w, h);
+                    ctx.drawImage(img, (i % cols) * w, Math.floor(i / cols) * h, w, h, 0, 0, w, h);
                     arr.push(canvas.toDataURL());
                 }
             } catch (e) { console.error("Missing file: " + file); }
