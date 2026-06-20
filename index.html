@@ -1,310 +1,319 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AZRA'S GARDEN</title>
-    <style>
-        body { background-color: #000; color: #FFD700; margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-image: url('star.png'); background-size: cover; }
-        
-        /* SCREENS */
-        .screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 300; background: rgba(0,0,0,0.9); text-align: center; overflow-y: auto; }
-        #home-screen { display: flex; }
-        
-        /* UI ELEMENTS */
-        #hud { position: fixed; top: 0; width: 100%; height: 60px; background: #111; display: none; justify-content: space-around; align-items: center; z-index: 100; border-bottom: 2px solid #FFD700; }
-        #game-area { position: relative; width: 100vw; height: calc(100dvh - 60px); margin-top: 60px; display: none; }
-        .tile { position: absolute; width: 15vw; height: 15vw; border: 2px solid #FFD700; border-radius: 8px; cursor: pointer; transition: 0.2s; background-size: cover; background-position: center; }
-        
-        /* LIBRARY & OVERLAYS */
-        #lib-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 20px; width: 90%; }
-        #lib-grid img { width: 100%; border: 1px solid #444; border-radius: 5px; cursor: pointer; }
-        #full-view { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 500; display: none; justify-content: center; align-items: center; }
-        #full-view img { max-width: 95%; max-height: 95%; border: 2px solid gold; }
-
-        input, button, select { padding: 12px; margin: 8px; border-radius: 5px; border: 1px solid gold; background: #222; color: gold; font-size: 1rem; }
-        .stat-box { border: 1px solid #444; padding: 15px; margin: 10px; width: 80%; background: #111; border-radius: 10px; }
-    </style>
-</head>
-<body>
-
-<!-- HOME SCREEN -->
-<div id="home-screen" class="screen">
-    <h1>AZRA'S GARDEN</h1>
-    <div class="stat-box">
-        <input type="text" id="playerName" placeholder="Enter Gardener Name">
-        <button onclick="login()">LOGIN / LOAD PROFILE</button>
-        <p id="profile-status">No profile loaded</p>
-    </div>
-
-    <div id="menu-options" style="display:none;">
-        <div class="stat-box">
-            <p id="stats-display">Stage: 1 | IQ: 100 | Keys: 0</p>
-            <label>Difficulty (1-5):</label>
-            <input type="range" id="diffRange" min="1" max="5" value="1" oninput="state.difficulty = this.value; document.getElementById('diffVal').innerText = this.value">
-            <span id="diffVal">1</span>
-        </div>
-        
-        <button onclick="launchGame()" style="background: gold; color: black; font-weight: bold;">START GARDENING</button>
-        <button onclick="toggleLibrary()">OPEN LIBRARY</button>
-        <button onclick="showRules()">HOW TO PLAY</button>
-        <button onclick="logout()">LOGOUT</button>
-    </div>
-</div>
-
-<!-- HUD -->
-<div id="hud">
-    <div id="iq-hud">IQ: 100</div>
-    <div id="stage-hud">Stage: 1</div>
-    <div id="keys-hud" onclick="showChests()" style="cursor:pointer; border: 1px solid gold; padding: 4px;">Keys: 0</div>
-    <button onclick="exitToHome()">HOME</button>
-</div>
-
-<!-- OVERLAYS -->
-<div id="game-area"></div>
-<div id="overlay" class="screen"></div>
-<div id="full-view" onclick="this.style.display='none'"></div>
-
-<script>
-    // --- DATABASE (LARGE STORAGE) ---
-    const db = {
-        open: () => new Promise(res => {
-            let req = indexedDB.open("AzraDB", 1);
-            req.onupgradeneeded = () => req.result.createObjectStore("store");
-            req.onsuccess = () => res(req.result);
-        }),
-        get: async (k) => {
-            const d = await db.open();
-            return new Promise(r => {
-                let t = d.transaction("store", "readonly").objectStore("store").get(k);
-                t.onsuccess = () => r(t.result);
-            });
-        },
-        set: async (k, v) => {
-            const d = await db.open();
-            d.transaction("store", "readwrite").objectStore("store").put(v, k);
-        }
-    };
-
-    // --- GLOBAL STATE ---
-    let state = {
-        player: '', stage: 1, iq: 100, keys: 0, chestCycle: 0, difficulty: 1,
-        tiles: [], rewardPool: [], chestPool: [], library: [], 
-        active: false, selected: []
-    };
-
-    const sounds = {
-        bgm: new Audio('bgm.mp3'), ping: new Audio('ping.wav'), 
-        win: new Audio('success.mp3'), creak: new Audio('creak.mp3')
-    };
-
-    // --- PROFILE SYSTEM ---
-    async function login() {
-        const name = document.getElementById('playerName').value;
-        if (!name) return alert("Enter a name!");
-        state.player = name;
-
-        // Instant Load
-        state.stage = parseInt(localStorage.getItem(`azraStage_${name}`)) || 1;
-        state.iq = parseInt(localStorage.getItem(`azraIQ_${name}`)) || 100;
-        state.keys = parseInt(localStorage.getItem(`azraKeys_${name}`)) || 0;
-        state.chestCycle = parseInt(localStorage.getItem(`azraCycle_${name}`)) || 0;
-        
-        // Large Load
-        state.library = await db.get(`lib_${name}`) || [];
-
-        document.getElementById('profile-status').innerText = `Welcome, ${name}!`;
-        document.getElementById('menu-options').style.display = 'block';
-        updateHUD();
-        saveGame();
-    }
-
-    function logout() { location.reload(); }
-
-    // --- GAME ENGINE ---
-    async function launchGame() {
-        document.getElementById('home-screen').style.display = 'none';
-        document.getElementById('hud').style.display = 'flex';
-        document.getElementById('game-area').style.display = 'block';
-        
-        sounds.bgm.loop = true;
-        sounds.bgm.play();
-        
-        await initAssets();
-        renderStage();
-    }
-
-        async function initAssets() {
-        state.tiles = []; state.rewardPool = []; state.chestPool = [];
-        
-        const loadSlice = async (file, rows, cols, arr) => {
-            const img = new Image(); img.src = file;
-            await img.decode();
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            const w = img.width / cols, h = img.height / rows;
-            for(let i=0; i<(rows*cols); i++) {
-                canvas.width = w; canvas.height = h;
-                ctx.drawImage(img, (i%cols)*w, Math.floor(i/cols)*h, w, h, 0, 0, w, h);
-                arr.push(canvas.toDataURL());
-            }
-        };
-
-        await loadSlice('P50.png', 7, 7, state.tiles);
-        await loadSlice('A2.png', 5, 5, state.rewardPool);
-        await loadSlice('A3.png', 7, 7, state.chestPool);
-                              }
-        // Prize sheet based on milestones
-        let prizeFile = 'A2.png';
-        if (state.stage > 75) prizeFile = 'a2a3.png';
-        else if (state.stage > 50) prizeFile = 'a2a2.png';
-        else if (state.stage > 25) prizeFile = 'a2a1.png';
-
-        await loadSlice('P50.png', 7, 7, state.tiles);
-        await loadSlice(prizeFile, 5, 5, state.rewardPool);
-        await loadSlice('A3.png', 7, 7, state.chestPool);
-    }
-
-    function renderStage() {
-        state.active = true;
-        state.selected = [];
-        const area = document.getElementById('game-area');
-        area.innerHTML = '';
-        
-        // Difficulty Logic
-        let baseTiles = 8 + (state.difficulty * 4);
-        let count = Math.min(70, baseTiles + (state.stage * 2));
-        if (count % 2 !== 0) count++;
-
-        // Random Selection (Reduce Repetition)
-        let deck = [...state.tiles].sort(() => Math.random() - 0.5).slice(0, count/2);
-        deck = [...deck, ...deck].sort(() => Math.random() - 0.5);
-
-        deck.forEach(src => {
-            const el = document.createElement('div');
-            el.className = 'tile';
-            el.style.backgroundImage = `url(${src})`;
-            el.style.left = Math.random() * (window.innerWidth - 80) + 'px';
-            el.style.top = Math.random() * (window.innerHeight - 180) + 'px';
-            el.onclick = () => handleTap(el, src);
-            area.appendChild(el);
-        });
-        updateHUD();
-    }
-
-    function handleTap(el, src) {
-        if (!state.active || state.selected.length >= 2 || el.style.visibility === 'hidden') return;
-        el.style.border = "2px solid white";
-        state.selected.push({el, src});
-        playSnd('ping');
-
-        if (state.selected.length === 2) {
-            state.active = false;
-            setTimeout(() => {
-                if (state.selected[0].src === state.selected[1].src) {
-                    state.selected.forEach(s => s.el.style.visibility = 'hidden');
-                    state.iq += 10;
-                    playSnd('win');
-                    if (document.querySelectorAll('.tile:not([style*="hidden"])').length === 0) completeStage();
-                    else state.active = true;
-                } else {
-                    state.selected.forEach(s => s.el.style.border = "2px solid gold");
-                    state.active = true;
-                }
-                state.selected = [];
-                updateHUD();
-            }, 300); // Snappy 300ms delay
-        }
-    }
-
-    function completeStage() {
-        const prize = state.rewardPool[(state.stage - 1) % 25];
-        if(!state.library.includes(prize)) state.library.push(prize);
-        if (state.stage % 3 === 0) state.keys++;
-        
-        state.stage++;
-        saveGame();
-        
-        const overlay = document.getElementById('overlay');
-        overlay.innerHTML = `<h1>STAGE ${state.stage-1} CLEAR</h1><img src="${prize}" style="width:70%; border:2px solid gold;"><p>Added to Library</p><button onclick="exitToHome()">RETURN TO HOME</button>`;
-        overlay.style.display = 'flex';
-    }
-
-    // --- CHEST SYSTEM (NO DUPLICATES) ---
-    function showChests() {
-        if (state.keys <= 0) return alert("No Keys!");
-        state.active = false;
-        const cycle = [1, 0, 2];
-        const pos15 = cycle[state.chestCycle % 3];
-        const options = [5, 10]; if(Math.random() > 0.5) options.reverse();
-        options.splice(pos15, 0, 15);
-
-        let html = '<h1>PICK A CHEST</h1><div style="display:flex;">';
-        options.forEach(amt => html += `<img src="Treasure.png" class="chest" onclick="openChest(${amt})">`);
-        document.getElementById('overlay').innerHTML = html + '</div>';
-        document.getElementById('overlay').style.display = 'flex';
-    }
-
-    function openChest(amt) {
-        playSnd('creak');
-        state.keys--; state.chestCycle++;
-        
-        // Prioritize missing pieces
-        let missing = state.chestPool.filter(pic => !state.library.includes(pic));
-        let pool = missing.length > 0 ? missing : state.chestPool;
-        let finds = [...pool].sort(() => Math.random() - 0.5).slice(0, amt);
-        
-        finds.forEach(f => { if(!state.library.includes(f)) state.library.push(f); });
-        saveGame();
-        alert(`Unlocked ${finds.length} new patterns!`);
-        exitToHome();
-    }
-
-    // --- UTILS ---
-    function saveGame() {
-        const n = state.player;
-        localStorage.setItem(`azraStage_${n}`, state.stage);
-        localStorage.setItem(`azraIQ_${n}`, state.iq);
-        localStorage.setItem(`azraKeys_${n}`, state.keys);
-        localStorage.setItem(`azraCycle_${n}`, state.chestCycle);
-        db.set(`lib_${n}`, state.library);
-    }
-
-    function updateHUD() {
-        const stats = `Stage: ${state.stage} | IQ: ${state.iq} | Keys: ${state.keys}`;
-        document.getElementById('stats-display').innerText = stats;
-        document.getElementById('iq-hud').innerText = `IQ: ${state.iq}`;
-        document.getElementById('stage-hud').innerText = `Stage: ${state.stage}`;
-        document.getElementById('keys-hud').innerText = `Keys: ${state.keys}`;
-    }
-
-    function toggleLibrary() {
-        const over = document.getElementById('overlay');
-        over.style.display = 'flex';
-        let html = '<h1>LIBRARY</h1><div id="lib-grid">';
-        state.library.forEach(img => html += `<img src="${img}" onclick="viewFull('${img}')">`);
-        over.innerHTML = html + '</div><button onclick="document.getElementById(\'overlay\').style.display=\'none\'">CLOSE</button>';
-    }
-
-    function viewFull(src) {
-        const v = document.getElementById('full-view');
-        v.innerHTML = `<img src="${src}">`;
-        v.style.display = 'flex';
-    }
-
-    function exitToHome() {
-        document.getElementById('overlay').style.display = 'none';
-        document.getElementById('game-area').style.display = 'none';
-        document.getElementById('hud').style.display = 'none';
-        document.getElementById('home-screen').style.display = 'flex';
-        updateHUD();
-    }
-
-    function playSnd(t) { let s = sounds[t].cloneNode(); s.volume = 0.5; s.play(); }
-
-    function showRules() {
-        alert("RULES:\n1. Match pairs of tiles to clear the garden.\n2. Earn prizes for every stage.\n3. Every 3 stages earn a KEY.\n4. Use Keys on the HUD to unlock chests for rare A3 patterns.\n5. Difficulty affects how many tiles spawn.");
-    }
-</script>
-</body>
-</html>
+1: <!DOCTYPE html>
+2: <html lang="en">
+3: <head>
+4:     <meta charset="UTF-8">
+5:     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+6:     <title>AZRA'S GARDEN</title>
+7:     <style>
+8:         body { background-color: #000; color: #FFD700; margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-image: url('star.png'); background-size: cover; }
+9:         
+10:         /* SCREENS */
+11:         .screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 300; background: rgba(0,0,0,0.9); text-align: center; overflow-y: auto; }
+12:         #home-screen { display: flex; }
+13:         
+14:         /* UI ELEMENTS */
+15:         #hud { position: fixed; top: 0; width: 100%; height: 60px; background: #111; display: none; justify-content: space-around; align-items: center; z-index: 100; border-bottom: 2px solid #FFD700; }
+16:         #game-area { position: relative; width: 100vw; height: calc(100dvh - 60px); margin-top: 60px; display: none; }
+17:         .tile { position: absolute; width: 15vw; height: 15vw; border: 2px solid #FFD700; border-radius: 8px; cursor: pointer; transition: 0.2s; background-size: cover; background-position: center; }
+18:         
+19:         /* LIBRARY & OVERLAYS */
+20:         #lib-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 20px; width: 90%; }
+21:         #lib-grid img { width: 100%; border: 1px solid #444; border-radius: 5px; cursor: pointer; }
+22:         #full-view { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 500; display: none; justify-content: center; align-items: center; }
+23:         #full-view img { max-width: 95%; max-height: 95%; border: 2px solid gold; }
+24: 
+25:         input, button, select { padding: 12px; margin: 8px; border-radius: 5px; border: 1px solid gold; background: #222; color: gold; font-size: 1rem; }
+26:         .stat-box { border: 1px solid #444; padding: 15px; margin: 10px; width: 80%; background: #111; border-radius: 10px; }
+27:     </style>
+28: </head>
+29: <body>
+30: 
+31: <!-- HOME SCREEN -->
+32: <div id="home-screen" class="screen">
+33:     <h1>AZRA'S GARDEN</h1>
+34:     <div class="stat-box">
+35:         <input type="text" id="playerName" placeholder="Enter Gardener Name">
+36:         <button onclick="login()">LOGIN / LOAD PROFILE</button>
+37:         <p id="profile-status">No profile loaded</p>
+38:     </div>
+39: 
+40:     <div id="menu-options" style="display:none;">
+41:         <div class="stat-box">
+42:             <p id="stats-display">Stage: 1 | IQ: 100 | Keys: 0</p>
+43:             <label>Difficulty (1-5):</label>
+44:             <input type="range" id="diffRange" min="1" max="5" value="1" oninput="state.difficulty = this.value; document.getElementById('diffVal').innerText = this.value">
+45:             <span id="diffVal">1</span>
+46:         </div>
+47:         
+48:         <button onclick="launchGame()" style="background: gold; color: black; font-weight: bold;">START GARDENING</button>
+49:         <button onclick="toggleLibrary()">OPEN LIBRARY</button>
+50:         <button onclick="showRules()">HOW TO PLAY</button>
+51:         <button onclick="logout()">LOGOUT</button>
+52:     </div>
+53: </div>
+54: 
+55: <!-- HUD -->
+56: <div id="hud">
+57:     <div id="iq-hud">IQ: 100</div>
+58:     <div id="stage-hud">Stage: 1</div>
+59:     <div id="keys-hud" onclick="showChests()" style="cursor:pointer; border: 1px solid gold; padding: 4px;">Keys: 0</div>
+60:     <button onclick="exitToHome()">HOME</button>
+61: </div>
+62: 
+63: <!-- OVERLAYS -->
+64: <div id="game-area"></div>
+65: <div id="overlay" class="screen"></div>
+66: <div id="full-view" onclick="this.style.display='none'"></div>
+67: 
+68: <script>
+69:     // --- DATABASE (LARGE STORAGE) ---
+70:     const db = {
+71:         open: () => new Promise(res => {
+72:             let req = indexedDB.open("AzraDB", 1);
+73:             req.onupgradeneeded = () => req.result.createObjectStore("store");
+74:             req.onsuccess = () => res(req.result);
+75:         }),
+76:         get: async (k) => {
+77:             const d = await db.open();
+78:             return new Promise(r => {
+79:                 let t = d.transaction("store", "readonly").objectStore("store").get(k);
+80:                 t.onsuccess = () => r(t.result);
+81:             });
+82:         },
+83:         set: async (k, v) => {
+84:             const d = await db.open();
+85:             d.transaction("store", "readwrite").objectStore("store").put(v, k);
+86:         }
+87:     };
+88: 
+89:     // --- GLOBAL STATE ---
+90:     let state = {
+91:         player: '', stage: 1, iq: 100, keys: 0, chestCycle: 0, difficulty: 1,
+92:         tiles: [], rewardPool: [], chestPool: [], library: [], 
+93:         active: false, selected: []
+94:     };
+95: 
+96:     const sounds = {
+97:         bgm: new Audio('bgm.mp3'), ping: new Audio('ping.wav'), 
+98:         win: new Audio('success.mp3'), creak: new Audio('creak.mp3')
+99:     };
+100: 
+101:     // --- PROFILE SYSTEM ---
+102:     async function login() {
+103:         const name = document.getElementById('playerName').value;
+104:         if (!name) return alert("Enter a name!");
+105:         state.player = name;
+106:         document.getElementById('profile-status').innerText = "Loading Profile...";
+107: 
+108:         try {
+109:             // Instant Load from LocalStorage
+110:             state.stage = parseInt(localStorage.getItem(`azraStage_${name}`)) || 1;
+111:             state.iq = parseInt(localStorage.getItem(`azraIQ_${name}`)) || 100;
+112:             state.keys = parseInt(localStorage.getItem(`azraKeys_${name}`)) || 0;
+113:             state.chestCycle = parseInt(localStorage.getItem(`azraCycle_${name}`)) || 0;
+114:             
+115:             // Database Load (with fallback if it hangs)
+116:             const savedLib = await db.get(`lib_${name}`);
+117:             state.library = savedLib || [];
+118: 
+119:             document.getElementById('profile-status').innerText = `Welcome, ${name}!`;
+120:             document.getElementById('menu-options').style.display = 'block';
+121:             updateHUD();
+122:         } catch (e) {
+123:             console.log("Storage error, starting fresh.");
+124:             document.getElementById('menu-options').style.display = 'block';
+125:         }
+126:     }
+127: 
+128:     function logout() { location.reload(); }
+129: 
+130:     // --- GAME ENGINE ---
+131:     async function launchGame() {
+132:         document.getElementById('home-screen').style.display = 'none';
+133:         document.getElementById('hud').style.display = 'flex';
+134:         document.getElementById('game-area').style.display = 'block';
+135:         
+136:         sounds.bgm.loop = true;
+137:         sounds.bgm.play();
+138:         
+139:         await initAssets();
+140:         renderStage();
+141:     }
+142: 
+143:     async function initAssets() {
+144:         state.tiles = []; state.rewardPool = []; state.chestPool = [];
+145:         const p = document.getElementById('progress');
+146:         
+147:         const loadSlice = async (file, rows, cols, arr) => {
+148:             const img = new Image(); img.src = file;
+149:             try {
+150:                 await img.decode();
+151:                 const canvas = document.createElement('canvas');
+152:                 const ctx = canvas.getContext('2d');
+153:                 const w = img.width / cols, h = img.height / rows;
+154:                 for(let i=0; i<(rows*cols); i++) {
+155:                     canvas.width = w; canvas.height = h;
+156:                     ctx.drawImage(img, (i%cols)*w, Math.floor(i/rows)*h, w, h, 0, 0, w, h);
+157:                     arr.push(canvas.toDataURL());
+158:                 }
+159:             } catch (e) { console.error("Missing file: " + file); }
+160:         };
+161: 
+162:         let prizeFile = 'A2.png';
+163:         if (state.stage > 75) prizeFile = 'a2a3.png';
+164:         else if (state.stage > 50) prizeFile = 'a2a2.png';
+165:         else if (state.stage > 25) prizeFile = 'a2a1.png';
+166: 
+167:         await loadSlice('P50.png', 7, 7, state.tiles);
+168:         p.style.width = '40%';
+169:         await loadSlice(prizeFile, 5, 5, state.rewardPool);
+170:         p.style.width = '70%';
+171:         await loadSlice('A3.png', 7, 7, state.chestPool);
+172:         p.style.width = '100%';
+173:     }
+174:         
+175: 
+176:     function renderStage() {
+177:         state.active = true;
+178:         state.selected = [];
+179:         const area = document.getElementById('game-area');
+180:         area.innerHTML = '';
+181:         
+182:         // Difficulty Logic
+183:         let baseTiles = 8 + (state.difficulty * 4);
+184:         let count = Math.min(70, baseTiles + (state.stage * 2));
+185:         if (count % 2 !== 0) count++;
+186: 
+187:         // Random Selection (Reduce Repetition)
+188:         let deck = [...state.tiles].sort(() => Math.random() - 0.5).slice(0, count/2);
+189:         deck = [...deck, ...deck].sort(() => Math.random() - 0.5);
+190: 
+191:         deck.forEach(src => {
+192:             const el = document.createElement('div');
+193:             el.className = 'tile';
+194:             el.style.backgroundImage = `url(${src})`;
+195:             el.style.left = Math.random() * (window.innerWidth - 80) + 'px';
+196:             el.style.top = Math.random() * (window.innerHeight - 180) + 'px';
+197:             el.onclick = () => handleTap(el, src);
+198:             area.appendChild(el);
+199:         });
+200:         updateHUD();
+201:     }
+202: 
+203:     function handleTap(el, src) {
+204:         if (!state.active || state.selected.length >= 2 || el.style.visibility === 'hidden') return;
+205:         el.style.border = "2px solid white";
+206:         state.selected.push({el, src});
+207:         playSnd('ping');
+208: 
+209:         if (state.selected.length === 2) {
+210:             state.active = false;
+211:             setTimeout(() => {
+212:                 if (state.selected[0].src === state.selected[1].src) {
+213:                     state.selected.forEach(s => s.el.style.visibility = 'hidden');
+214:                     state.iq += 10;
+215:                     playSnd('win');
+216:                     if (document.querySelectorAll('.tile:not([style*="hidden"])').length === 0) completeStage();
+217:                     else state.active = true;
+218:                 } else {
+219:                     state.selected.forEach(s => s.el.style.border = "2px solid gold");
+220:                     state.active = true;
+221:                 }
+222:                 state.selected = [];
+223:                 updateHUD();
+224:             }, 300); // Snappy 300ms delay
+225:         }
+226:     }
+227: 
+228:     function completeStage() {
+229:         const prize = state.rewardPool[(state.stage - 1) % 25];
+230:         if(!state.library.includes(prize)) state.library.push(prize);
+231:         if (state.stage % 3 === 0) state.keys++;
+232:         
+233:         state.stage++;
+234:         saveGame();
+235:         
+236:         const overlay = document.getElementById('overlay');
+237:         overlay.innerHTML = `<h1>STAGE ${state.stage-1} CLEAR</h1><img src="${prize}" style="width:70%; border:2px solid gold;"><p>Added to Library</p><button onclick="exitToHome()">RETURN TO HOME</button>`;
+238:         overlay.style.display = 'flex';
+239:     overlay.querySelector('button').onclick = exitToHome;
+240:     }
+241: 
+242:     // --- CHEST SYSTEM (NO DUPLICATES) ---
+243:     function showChests() {
+244:         if (state.keys <= 0) return alert("No Keys!");
+245:         state.active = false;
+246:         const cycle = [1, 0, 2];
+247:         const pos15 = cycle[state.chestCycle % 3];
+248:         const options = [5, 10]; if(Math.random() > 0.5) options.reverse();
+249:         options.splice(pos15, 0, 15);
+250: 
+251:         let html = '<h1>PICK A CHEST</h1><div style="display:flex;">';
+252:         options.forEach(amt => html += `<img src="Treasure.png" class="chest" onclick="openChest(${amt})">`);
+253:         document.getElementById('overlay').innerHTML = html + '</div>';
+254:         document.getElementById('overlay').style.display = 'flex';
+255:     }
+256: 
+257:     function openChest(amt) {
+258:         playSnd('creak');
+259:         state.keys--; state.chestCycle++;
+260:         
+261:         // Prioritize missing pieces
+262:         let missing = state.chestPool.filter(pic => !state.library.includes(pic));
+263:         let pool = missing.length > 0 ? missing : state.chestPool;
+264:         let finds = [...pool].sort(() => Math.random() - 0.5).slice(0, amt);
+265:         
+266:         finds.forEach(f => { if(!state.library.includes(f)) state.library.push(f); });
+267:         saveGame();
+268:         alert(`Unlocked ${finds.length} new patterns!`);
+269:         exitToHome();
+270:     }
+271: 
+272:     // --- UTILS ---
+273:     function saveGame() {
+274:         const n = state.player;
+275:         localStorage.setItem(`azraStage_${n}`, state.stage);
+276:         localStorage.setItem(`azraIQ_${n}`, state.iq);
+277:         localStorage.setItem(`azraKeys_${n}`, state.keys);
+278:         localStorage.setItem(`azraCycle_${n}`, state.chestCycle);
+279:         db.set(`lib_${n}`, state.library);
+280:     }
+281: 
+282:     function updateHUD() {
+283:         const stats = `Stage: ${state.stage} | IQ: ${state.iq} | Keys: ${state.keys}`;
+284:         document.getElementById('stats-display').innerText = stats;
+285:         document.getElementById('iq-hud').innerText = `IQ: ${state.iq}`;
+286:         document.getElementById('stage-hud').innerText = `Stage: ${state.stage}`;
+287:         document.getElementById('keys-hud').innerText = `Keys: ${state.keys}`;
+288:     }
+289: 
+290:     function toggleLibrary() {
+291:         const over = document.getElementById('overlay');
+292:         over.style.display = 'flex';
+293:         let html = '<h1>LIBRARY</h1><div id="lib-grid">';
+294:         state.library.forEach(img => html += `<img src="${img}" onclick="viewFull('${img}')">`);
+295:         over.innerHTML = html + '</div><button onclick="document.getElementById(\'overlay\').style.display=\'none\'">CLOSE</button>';
+296:     }
+297: 
+298:     function viewFull(src) {
+299:         const v = document.getElementById('full-view');
+300:         v.innerHTML = `<img src="${src}">`;
+301:         v.style.display = 'flex';
+302:     }
+303: 
+304:     function exitToHome() {
+305:         document.getElementById('overlay').style.display = 'none';
+306:         document.getElementById('game-area').style.display = 'none';
+307:         document.getElementById('hud').style.display = 'none';
+308:         document.getElementById('home-screen').style.display = 'flex';
+309:         updateHUD();
+310:     }
+311: 
+312:     function playSnd(t) { let s = sounds[t].cloneNode(); s.volume = 0.5; s.play(); }
+313: 
+314:     function showRules() {
+315:         alert("RULES:\n1. Match pairs of tiles to clear the garden.\n2. Earn prizes for every stage.\n3. Every 3 stages earn a KEY.\n4. Use Keys on the HUD to unlock chests for rare A3 patterns.\n5. Difficulty affects how many tiles spawn.");
+316:     }
+317: </script>
+318: </body>
+319: </html>
